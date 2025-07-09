@@ -17,7 +17,7 @@ This project is based on our hypothesis that highest user experience comes from 
 
 The final product will deliver fair and balanced team compositions on request.
 
-## 2 · API Analysis
+## 3 · API Analysis
 
 > This project includes an in-depth analysis of the Riot Games Developer APIs. The goal was to extract meaningful features for training matchmaking models.
 
@@ -47,17 +47,17 @@ The final product will deliver fair and balanced team compositions on request.
 - `match_timeline` events are frame-based and often require aggregation or transformation.
 - Static data mapping (e.g., `championId`, `spellId`, `itemId`) must be handled via DDragon JSON files.
 
-## 3 · Database Architecture
+## 4 · Database Architecture
 
 > All DDL lives in **`/sql/schema.sql`**.
 
-| Layer | Tables | Purpose |
-|-------|--------|---------|
-| **Match Metadata** | `matches` | Immutable, match-level facts |
-| **Team Aggregates** | `team`, `team_ban` | One row per team per match + draft bans |
-| **Participant Facts** | `participant_stats` | Per-player telemetry (≈ 130 columns) |
+| Tables | Purpose |
+|--------|---------|
+| `matches` | Immutable, match-level facts |
+| `team`, `team_ban` | One row per team per match + draft bans |
+| `participant_stats` | Per-player telemetry (≈ 130 columns) |
 
-## 4 · API Client
+## 5 · API Client
 
 > Asynchronous, static typed Riot API client in python with local rate limiter.
 
@@ -65,7 +65,7 @@ This project uses an **asynchronous API client** to communicate with Riot Games'
 The client uses `httpx`, `asyncio`, and `limits` packages, allowing high-speed parallel requests while adhering to Riot API's rate limits.
 `pydantic` package is used to deserialize responses into static data structure with refined types for better semantics.
 
-##  5 · Data Collection
+##  6 · Data Collection
 
 > We plan to build a scalable data collector that continuously ingest match data from Riot’s API.
 
@@ -79,7 +79,7 @@ The client uses `httpx`, `asyncio`, and `limits` packages, allowing high-speed p
 
 💡 All crawling respects Riot's official rate limits per region and method, ensuring our system remains compliant and non-disruptive to their infrastructure.
 
-## 6 · Model Training – Planned Flow
+## 7 · Model Training – Planned Flow
 
 > Once we have a database filled with matches, we’ll begin training models to output expected match outcomes.
 
