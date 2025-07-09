@@ -10,7 +10,7 @@ This project is based on our hypothesis that highest user experience comes from 
 
 1. **Analyze** Riot’s public APIs (Account V1, Match V5, League V4) to understand data structures and constraints.
 2. **Build** a structured relational database to store match data with optimized schemas and indexes.
-3. (*Current) **Implements** a custom API client to crawl and collect large-scale match data.
+3. (*Current) **Implements** a custom API client to collect and collect large-scale match data.
 4. **Extract** and engineers player- and team-level features for model training.
 5. **Train** a machine learning model to predict match outcomes before a game starts.
 6. **Generate** optimized team combinations with expected win ratio of 50:50
@@ -77,7 +77,7 @@ The client uses `httpx`, `asyncio`, and `limits` packages, allowing high-speed p
 4. **Remove duplicates and store** in a database table
 5. **Log gaps or failures** for retry queue or fallback logic
 
-💡 All crawling respects Riot's official rate limits per region and method, ensuring our system remains compliant and non-disruptive to their infrastructure.
+💡 All collecting respects Riot's official rate limits per region and method, ensuring our system remains compliant and non-disruptive to their infrastructure.
 
 ## 7 · Model Training – Planned Flow
 
