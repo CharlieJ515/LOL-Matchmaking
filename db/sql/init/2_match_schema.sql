@@ -233,7 +233,8 @@ CREATE TABLE participant_stats (
 
     PRIMARY KEY (match_id, participant_id),
     FOREIGN KEY (match_id) REFERENCES matches (match_id) ON DELETE CASCADE,
-    FOREIGN KEY (match_id, team_id) REFERENCES team (match_id, team_id) ON DELETE CASCADE
+    FOREIGN KEY (match_id, team_id) REFERENCES team (match_id, team_id) ON DELETE CASCADE,
+    FOREIGN KEY (puuid) REFERENCES users (puuid)
 );
 
 CREATE INDEX idx_participant_stats_puuid        ON participant_stats (puuid);
