@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import json
 from typing import List
 import functools
@@ -7,6 +6,8 @@ import itertools
 import os
 import time
 import random
+import logging
+from logging.handlers import RotatingFileHandler
 
 import psycopg
 import psycopg_pool
@@ -27,16 +28,18 @@ from riot_api.types.request import (
     RankedQueue,
     RankedDivision,
 )
+from riot_api.exceptions import RateLimitError
 
 logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
     handlers=[
-        logging.FileHandler("app.log", encoding="utf-8"),
+        RotatingFileHandler("app.log", maxBytes=10 * 1024 * 1024, backupCount=5),
         logging.StreamHandler(),  # keep printing to console
     ],
 )
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 load_dotenv()
 
 
@@ -59,7 +62,7 @@ INSERT_USER_SQL = """
 storage = MemoryStorage()
 limiter = FixedWindowRateLimiter(storage)
 limit_namespace = API_KEY[-6:]
-logging.debug(f"Using rate limiter storage: {storage.__class__.__name__}")
+logger.debug(f"Using rate limiter storage: {storage.__class__.__name__}")
 
 
 async def insert_user(platform: RoutePlatform, response: PuuidListDTO):
@@ -75,30 +78,41 @@ async def insert_user(platform: RoutePlatform, response: PuuidListDTO):
 def add_rate_limit(
     func,
     limiter: RateLimiter,
-    limit: RateLimitItem,
-    debug_identifier: str,
-    *identifiers: str,
+    limits_with_keys: list[tuple[RateLimitItem, tuple[str, ...]]],
+    prefix: str,
+    safety_margin: float = 0.0,
+    jitter: float = 0.2,
 ):
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
         while True:
-            window = await limiter.get_window_stats(limit, *identifiers)
-            logging.debug(
-                f"{debug_identifier}: Remaining rate limit {window.remaining}"
-            )
+            flag = True
+            for limit, keys in limits_with_keys:
+                if await limiter.test(limit, *keys):
+                    continue
 
-            if await limiter.hit(limit, *identifiers):
+                window = await limiter.get_window_stats(limit, *keys)
+                sleep_time = (
+                    max(0, window.reset_time - time.time())
+                    + safety_margin
+                    + random.uniform(0, jitter)
+                )
+                logger.debug(
+                    f"{prefix} Limit {limit} for {keys} exceeded. Sleeping for {sleep_time:.2f}s"
+                )
+                await asyncio.sleep(sleep_time)
+
+                flag = False
+                break  # retry whole loop after sleep
+
+            if flag:
                 break
 
-            window = await limiter.get_window_stats(limit, *identifiers)
-            safety_margin = 0.3 + random.uniform(0.1, 0.3)
-            sleep_duration = max(0, window.reset_time - time.time() + safety_margin)
-            logging.debug(
-                f"{debug_identifier}: Rate limit reached, sleeping for {sleep_duration:.2f} seconds"
-            )
-            await asyncio.sleep(sleep_duration)
+        # now commit all
+        for limit, keys in limits_with_keys:
+            await limiter.hit(limit, *keys)
 
-        logging.debug(f"{debug_identifier}: Rate limit check passed, running function")
+        logger.debug(f"{prefix} Limits acquired. Executing query")
         res, header = await func(*args, **kwargs)
         return res, header
 
@@ -132,7 +146,11 @@ def log_header_limits(headers: httpx.Headers, prefix):
         )
 
     log_message = "\n".join(log_parts)
-    logging.debug(f"{prefix}\n{log_message}")
+    logger.debug(f"{prefix}\n{log_message}")
+
+
+global stop_workers
+stop_workers = False
 
 
 async def worker(
@@ -142,60 +160,62 @@ async def worker(
     division: RankedDivision,
     page: int,
     worker_id: int,
+    stop_all_workers: asyncio.Event,
+    stop_region_workers: asyncio.Event,
 ):
     prefix = f"[Worker {worker_id:04d}]"
-    logging.info(f"{prefix} started for {platform.name}, {queue}, {tier}, {division}")
+    logger.info(f"{prefix} started for {platform.name}, {queue}, {tier}, {division}")
 
     # storage = RedisStorage(REDIS_DSN)
 
     client = RiotClient(API_KEY)
 
     # add limits to region and endpoint
-    platform_limit2 = RateLimitItemPerSecond(int(20 * 0.9), 1 + 1, limit_namespace)
-    client.send_request = add_rate_limit(
-        client.send_request,
-        limiter,
-        platform_limit2,
-        f"{prefix} PlatformLimit2",
-        platform.name,
-    )
-    endpoint_limit = RateLimitItemPerSecond(int(50 * 0.9), 10 + 1, limit_namespace)
+    limits_with_keys = [
+        (
+            RateLimitItemPerSecond(int(20 * 0.9), 1 + 1, limit_namespace),
+            (platform.name,),
+        ),
+        (
+            RateLimitItemPerSecond(int(50 * 0.9), 10 + 1, limit_namespace),
+            (
+                platform.name,
+                "get_league_entries_by_tier",
+            ),
+        ),
+        (
+            RateLimitItemPerSecond(int(100 * 0.9), 120 + 1, limit_namespace),
+            (platform.name,),
+        ),
+    ]
     client.get_league_entries_by_tier = add_rate_limit(
-        client.get_league_entries_by_tier,
-        limiter,
-        endpoint_limit,
-        f"{prefix} EndpointLimit get_league_entries_by_tier",
-        platform.name,
-        "get_league_entries_by_tier",
-    )
-    platform_limit1 = RateLimitItemPerSecond(int(100 * 0.9), 120 + 1, limit_namespace)
-    client.send_request = add_rate_limit(
-        client.send_request,
-        limiter,
-        platform_limit1,
-        f"{prefix} PlatformLimit1",
-        platform.name,
+        client.get_league_entries_by_tier, limiter, limits_with_keys, prefix
     )
 
-    while True:
-        res, headers = await client.get_league_entries_by_tier(
-            platform, queue, tier, division, page, response_model=PuuidListDTO
-        )
-        logging.debug(
+    while not stop_all_workers.is_set() and not stop_region_workers.is_set():
+        try:
+            res, headers = await client.get_league_entries_by_tier(
+                platform, queue, tier, division, page, response_model=PuuidListDTO
+            )
+        except httpx.HTTPError as e:
+            return
+        except RateLimitError as e:
+            continue
+        logger.debug(
             f"Fetched page {page} for {platform.name} {tier} {division}, got {len(res.root)} results"
         )
         log_header_limits(headers, prefix)
 
         # if response is empty list, break
         if not res.root:
-            logging.info(
+            logger.info(
                 f"Region: {platform.name}, Queue: {queue}, Tier: {tier}, Division: {division} - Completed at {page} page"
             )
             break
 
         # store Puuid to database
         await insert_user(platform, res)
-        logging.debug(
+        logger.debug(
             f"Page {page} for {platform.name} {tier} {division} inserted to DB"
         )
 
@@ -206,9 +226,9 @@ async def main():
     global pool
     pool = psycopg_pool.AsyncConnectionPool(POSTGRES_DSN, max_size=20)
 
-    logging.info(f"RIOT_API_KEY: {API_KEY}")
-    logging.info(f"POSTGRES_DSN: {POSTGRES_DSN}")
-    logging.info(f"REDIS_DSN: {REDIS_DSN}")
+    logger.info(f"RIOT_API_KEY: {API_KEY}")
+    logger.info(f"POSTGRES_DSN: {POSTGRES_DSN}")
+    logger.info(f"REDIS_DSN: {REDIS_DSN}")
 
     tiers = [
         RankedTier.IRON,
@@ -220,14 +240,14 @@ async def main():
         RankedTier.DIAMOND,
     ]
 
-    logging.info("Starting all workers...")
+    logger.info("Starting all workers...")
     tasks = [
         worker(platform, queue, tier, division, 1, worker_id)
         for worker_id, (platform, queue, tier, division) in enumerate(
-            itertools.product([RoutePlatform.KR], RankedQueue, tiers, RankedDivision)
+            itertools.product(RoutePlatform, RankedQueue, tiers, RankedDivision)
         )
     ]
-    logging.info(f"Created {len(tasks)} workers")
+    logger.info(f"Created {len(tasks)} workers")
 
     # tasks = [
     #     worker(
@@ -240,7 +260,7 @@ async def main():
     # ]
 
     await asyncio.gather(*tasks)
-    logging.info("All workers completed.")
+    logger.info("All workers completed.")
 
 
 if __name__ == "__main__":
