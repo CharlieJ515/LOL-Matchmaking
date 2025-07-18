@@ -21,15 +21,8 @@ from limits.limits import RateLimitItem, RateLimitItemPerSecond
 from limits.aio.storage import MemoryStorage, RedisStorage
 from limits.aio.strategies import RateLimiter, FixedWindowRateLimiter
 
-from riot_api.error_handler import (
-    BadRequestError,
-    ForbiddenError,
-    NotFoundError,
-    ServerError,
-    UnauthorizedError,
-)
 import structlog
-from structlog.stdlib import LoggerFactory
+import structlog.stdlib
 
 from riot_api import Client as RiotClient
 from riot_api.types import Puuid
@@ -39,23 +32,21 @@ from riot_api.types.request import (
     RankedQueue,
     RankedDivision,
 )
-from riot_api.exceptions import RateLimitError
-
-level = os.environ.get("LOG_LEVEL", "INFO").upper()
-LOG_LEVEL = getattr(logging, level)
-structlog.configure(
-    processors=[
-        structlog.contextvars.merge_contextvars,
-        structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M.%S"),
-        structlog.processors.add_log_level,
-        structlog.processors.EventRenamer("msg"),
-        structlog.processors.dict_tracebacks,
-        structlog.processors.JSONRenderer(),
-    ],
-    logger_factory=LoggerFactory(),
-    wrapper_class=structlog.make_filtering_bound_logger(LOG_LEVEL),
+from riot_api.exceptions import (
+    BadRequestError,
+    ForbiddenError,
+    NotFoundError,
+    RateLimitError,
+    UnauthorizedError,
+    ServerError,
 )
-logger = structlog.get_logger()
+
+import logging_configuration
+
+# level = os.environ.get("LOG_LEVEL", "INFO").upper()
+# LOG_LEVEL = getattr(logging, level)
+logger = structlog.get_logger("collector")
+# logger.info(f"Set log level to {LOG_LEVEL}")
 load_dotenv()
 
 
@@ -117,7 +108,7 @@ def add_rate_limit(
                     + random.uniform(0, jitter)
                 )
                 logger.debug(
-                    f"Rate limit exceeded. Sleeping for {sleep_time:.2f}s",
+                    f"Local rate limit exceeded. Sleeping for {sleep_time:.2f}s",
                     limit=limit,
                     keys=keys,
                     sleep_time=sleep_time,
@@ -194,8 +185,12 @@ async def worker(
     stop_all_workers: asyncio.Event,
     stop_platform_workers: asyncio.Event,
 ):
-    logger = structlog.get_logger().bind(
-        worker=worker_id, platform=platform, queue=queue, tier=tier, division=division
+    logger = structlog.get_logger("collector").bind(
+        worker=worker_id,
+        platform=platform.value,
+        queue=queue.value,
+        tier=tier.value,
+        division=division.value,
     )
     logger.info("Worker started")
 
@@ -222,35 +217,70 @@ async def worker(
     client.get_league_entries_by_tier = add_rate_limit(
         logger, client.get_league_entries_by_tier, limiter, limits_with_keys
     )
+    logger.debug("Added Rate Limit")
 
     while not stop_all_workers.is_set() and not stop_platform_workers.is_set():
+        if stop_all_workers.is_set():
+            logger.debug("stop_all_workers is set, stopping worker")
+            break
+        if stop_platform_workers.is_set():
+            logger.debug("stop_platform_workers is set, stopping worker")
+            break
+
         try:
             res, headers = await client.get_league_entries_by_tier(
                 platform, queue, tier, division, page, response_model=PuuidListDTO
             )
         except httpx.HTTPError as e:
-            return
+            logger.critical(
+                "Encountered unexpected HTTP error, stopping worker",
+                page=page,
+                error=str(e),
+                exc_info=True,
+            )
+            break
         except ServerError as e:
             # stop all platform workers as problem resides in the server
             logger.critical(
-                "Encountered server error, stopping all platform workers", exc_info=True
+                "Encountered server error, stopping all platform workers",
+                status_code=e.status_code,
+                headers=e.headers,
+                body=e.body,
             )
             stop_platform_workers.set()
             break
         except UnauthorizedError as e:
             # stop all workers as API key is invalid
             logger.critical(
-                "Invalid API key, stopping all workers", API_KEY=API_KEY, exc_info=True
+                "Invalid API key, stopping all workers",
+                API_KEY=API_KEY,
+                status_code=e.status_code,
+                headers=e.headers,
+                body=e.body,
             )
             stop_all_workers.set()
             continue
         except RateLimitError as e:
             # wait for retry_after seconds then retry
-            logger.critical("", exc_info=True)
-            continue
+            logger.critical(
+                f"Server side rate limit exceeded. Sleeping for {e.retry_after}s",
+                status_code=e.status_code,
+                headers=e.headers,
+                body=e.body,
+                retry_after=e.retry_after,
+            )
+            # await asyncio.sleep(e.retry_after)
+            stop_all_workers.set()
+            break
         except (BadRequestError, ForbiddenError, NotFoundError) as e:
             # something wrong with query parameter, stopping current worker
-
+            logger.critical(
+                "Invalid request, stopping current user",
+                status_code=e.status_code,
+                headers=e.headers,
+                body=e.body,
+                page=page,
+            )
             break
 
         logger.debug(
@@ -277,6 +307,8 @@ async def worker(
 async def main():
     global pool
     pool = psycopg_pool.AsyncConnectionPool(POSTGRES_DSN, max_size=20)
+    logger.debug("Opening psycopg pool")
+    await pool.open()
     logger.info(f"Created psycopg pool with max_size {pool.max_size}")
 
     logger.info(f"RIOT_API_KEY: {API_KEY}")
@@ -298,7 +330,7 @@ async def main():
     logger.info("Starting all workers...")
     tasks = []
     worker_id = 0
-    for platform in RoutePlatform:
+    for platform in [RoutePlatform.KR]:
         stop_platform_workers = asyncio.Event()
         for queue, tier, division in itertools.product(
             RankedQueue, tiers, RankedDivision
@@ -316,10 +348,30 @@ async def main():
             worker_id += 1
             tasks.append(w)
 
+    # stop_platform_workers = asyncio.Event()
+    # tasks.append(
+    #     worker(
+    #         RoutePlatform.KR,
+    #         RankedQueue.RANKED_SOLO_5x5,
+    #         RankedTier.DIAMOND,
+    #         RankedDivision.I,
+    #         1,
+    #         worker_id,
+    #         stop_all_workers,
+    #         stop_platform_workers,
+    #     )
+    # )
     logger.info(f"Created {len(tasks)} workers")
 
     await asyncio.gather(*tasks)
-    logger.info("All workers completed.")
+
+    if stop_all_workers.is_set():
+        logger.info("All workers stopped.")
+    else:
+        logger.info("All workers completed.")
+
+    logger.debug("Closing psycopg pool")
+    await pool.close()
 
 
 if __name__ == "__main__":
