@@ -1,8 +1,8 @@
 import asyncio
-import json
 from typing import List
 import functools
 import itertools
+from collections import defaultdict
 import os
 import time
 import random
@@ -68,7 +68,8 @@ INSERT_USER_SQL = """
 """
 storage = MemoryStorage()
 limiter = FixedWindowRateLimiter(storage)
-limit_namespace = API_KEY[-6:]
+LIMIT_NAMESPACE = API_KEY[-6:]
+LIMIT_LOCK = defaultdict(asyncio.Lock)
 logger.info("Initialized rate limiter storage", storage=str(storage.__class__.__name__))
 
 
@@ -93,8 +94,13 @@ def add_rate_limit(
     safety_margin: float = 0.0,
     jitter: float = 0.2,
 ):
+    lock_key = hash(tuple(limits_with_keys))
+
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
+        lock = LIMIT_LOCK[lock_key]
+
+        await lock.acquire()
         while True:
             flag = True
             for limit, keys in limits_with_keys:
@@ -120,6 +126,7 @@ def add_rate_limit(
 
             if flag:
                 break
+        lock.release()
 
         # now commit all
         for limit, keys in limits_with_keys:
@@ -199,18 +206,18 @@ async def worker(
     # add limits to region and endpoint
     limits_with_keys = [
         (
-            RateLimitItemPerSecond(int(20 * 0.9), 1 + 1, limit_namespace),
+            RateLimitItemPerSecond(int(20 * 0.9), 1 + 1, LIMIT_NAMESPACE),
             (platform.name,),
         ),
         (
-            RateLimitItemPerSecond(int(50 * 0.9), 10 + 1, limit_namespace),
+            RateLimitItemPerSecond(int(50 * 0.9), 10 + 1, LIMIT_NAMESPACE),
             (
                 platform.name,
                 "get_league_entries_by_tier",
             ),
         ),
         (
-            RateLimitItemPerSecond(int(100 * 0.9), 120 + 1, limit_namespace),
+            RateLimitItemPerSecond(int(100 * 0.9), 120 + 1, LIMIT_NAMESPACE),
             (platform.name,),
         ),
     ]
@@ -330,7 +337,10 @@ async def main():
     logger.info("Starting all workers...")
     tasks = []
     worker_id = 0
-    for platform in [RoutePlatform.KR]:
+    for platform in RoutePlatform:
+        if platform == RoutePlatform.KR:
+            continue
+
         stop_platform_workers = asyncio.Event()
         for queue, tier, division in itertools.product(
             RankedQueue, tiers, RankedDivision
@@ -353,9 +363,9 @@ async def main():
     #     worker(
     #         RoutePlatform.KR,
     #         RankedQueue.RANKED_SOLO_5x5,
-    #         RankedTier.DIAMOND,
-    #         RankedDivision.I,
-    #         1,
+    #         RankedTier.GOLD,
+    #         RankedDivision.IV,
+    #         1250,
     #         worker_id,
     #         stop_all_workers,
     #         stop_platform_workers,
