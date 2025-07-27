@@ -67,6 +67,14 @@ CREATE TABLE participant_stats (
     champ_experience        INT          NOT NULL,
     champ_level             SMALLINT     NOT NULL,
 
+    item0                   INT,
+    item1                   INT,
+    item2                   INT,
+    item3                   INT,
+    item4                   INT,
+    item5                   INT,
+    item6                   INT,
+    
     kills                   SMALLINT     NOT NULL,
     first_blood_kill        BOOLEAN      NOT NULL,
     killing_sprees          SMALLINT     NOT NULL,
@@ -231,6 +239,10 @@ CREATE TABLE participant_stats (
     bounty_gold       INT,
     gold_per_minute   DECIMAL(6,2),
 
+    kills_on_laners_early_jungle_as_jungler   SMALLINT,
+    epic_monster_kills_near_enemy_jungler     SMALLINT,
+    epic_monster_kills_within30Seconds_of_spawn    SMALLINT,
+
     PRIMARY KEY (match_id, participant_id),
     FOREIGN KEY (match_id) REFERENCES matches (match_id) ON DELETE CASCADE,
     FOREIGN KEY (match_id, team_id) REFERENCES team (match_id, team_id) ON DELETE CASCADE,
@@ -239,3 +251,23 @@ CREATE TABLE participant_stats (
 
 CREATE INDEX idx_participant_stats_puuid        ON participant_stats (puuid);
 CREATE INDEX idx_participant_stats_puuid_match  ON participant_stats (puuid, match_id);
+
+CREATE TABLE participant_perk_styles (
+    match_id        VARCHAR(30) NOT NULL,
+    participant_id  SMALLINT    NOT NULL,
+    defense         INT         NOT NULL,
+    flex            INT         NOT NULL,
+    offense         INT         NOT NULL,
+    style_slot      SMALLINT    NOT NULL,
+    style_id        INT         NOT NULL,
+    description     VARCHAR(20) NOT NULL,
+    perk_id         INT         NOT NULL,
+    var1            INT         NOT NULL,
+    var2            INT         NOT NULL,
+    var3            INT         NOT NULL,
+    selection_index SMALLINT    NOT NULL,
+
+    PRIMARY KEY (match_id, participant_id, style_slot, selection_index),
+    FOREIGN KEY (match_id, participant_id) REFERENCES participant_stats (match_id, participant_id) ON DELETE CASCADE
+);
+
