@@ -13,7 +13,7 @@ services:
     restart: always
     shm_size: 128mb
     volumes:
-      - ${POSTGRES_VOLUME}:/var/lib/postgresql/data
+      - postgres_volume:/var/lib/postgresql/data
 
   pgadmin:
     container_name: lol-pgadmin
@@ -26,6 +26,6 @@ services:
     restart: always
 
 volumes:
-  postgres_data:
+  postgres_volume:
     name: ${POSTGRES_VOLUME}
     external: true
