@@ -54,7 +54,7 @@ CREATE TABLE teams (
 
 CREATE TABLE team_bans (
     game_id BIGINT NOT NULL,
-    team_id SMALLINT NOT NULL,
+    team_id team_enum NOT NULL,
     pick_turn SMALLINT NOT NULL,
     champion_id SMALLINT NOT NULL,
     PRIMARY KEY (game_id, team_id, pick_turn),
