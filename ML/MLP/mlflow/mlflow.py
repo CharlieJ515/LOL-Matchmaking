@@ -2,6 +2,8 @@ import os, json, mlflow, torch, matplotlib.pyplot as plt, seaborn as sns
 from datetime import datetime
 from sklearn.metrics import confusion_matrix, classification_report
 from torchinfo import summary
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
 
 def log_metrics_dict(metrics: dict, step: int):
     for name, value in metrics.items():
@@ -22,14 +24,76 @@ def plot_and_log(x, y, title, filename, y_label="Value", x_label="Epoch"):
     plt.close()
     mlflow.log_artifact(filename, artifact_path="plots")
 
+class MyModel(nn.Module):
+    def __init__(self, embedding_dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(embedding_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+        )
+    def forward(self, x):
+        return self.net(x).squeeze(1)
+
+def train_one_epoch(model, loader, optim):
+    model.train()
+    loss_fn = nn.BCEWithLogitsLoss()
+    total_loss = 0
+    for x, y in loader:
+        optim.zero_grad()
+        logits = model(x)
+        loss = loss_fn(logits, y)
+        loss.backward()
+        optim.step()
+        total_loss += loss.item() * x.size(0)
+    return total_loss / len(loader.dataset)
+
+def validate(model, loader):
+    model.eval()
+    loss_fn = nn.BCEWithLogitsLoss()
+    total_loss, correct = 0, 0
+    with torch.no_grad():
+        for x, y in loader:
+            logits = model(x)
+            loss = loss_fn(logits, y)
+            preds = torch.sigmoid(logits) > 0.5
+            correct += (preds.float() == y).sum().item()
+            total_loss += loss.item() * x.size(0)
+    return total_loss / len(loader.dataset), correct / len(loader.dataset)
+
+def get_all_preds(model, loader):
+    model.eval()
+    y_true, y_pred = [], []
+    with torch.no_grad():
+        for x, y in loader:
+            logits = model(x)
+            preds = (torch.sigmoid(logits) > 0.5).float()
+            y_true.extend(y.tolist())
+            y_pred.extend(preds.tolist())
+    return y_true, y_pred
+
 EXPERIMENT = "LoLMatchmaking"
 PARAMS = dict(
-    batch_size =
-    learning_rate =
-    embedding_dim =
-    optimizer =
-    epochs =
+    batch_size     = 256,
+    learning_rate  = 1e-3,
+    embedding_dim  = 32,
+    optimizer      = "Adam",
+    epochs         = 5
 )
+
+num_samples = 2000
+X = torch.randn(num_samples, PARAMS["embedding_dim"])
+y = torch.randint(0, 2, (num_samples,)).float()
+train_ds = TensorDataset(X[:1600], y[:1600])
+val_ds   = TensorDataset(X[1600:1800], y[1600:1800])
+test_ds  = TensorDataset(X[1800:], y[1800:])
+loader_train = DataLoader(train_ds, batch_size=PARAMS["batch_size"], shuffle=True)
+loader_val   = DataLoader(val_ds, batch_size=PARAMS["batch_size"])
+loader_test  = DataLoader(test_ds, batch_size=PARAMS["batch_size"])
 
 mlflow.set_experiment(EXPERIMENT)
 with mlflow.start_run(run_name=f"run_{datetime.now():%Y%m%d_%H%M%S}"):
