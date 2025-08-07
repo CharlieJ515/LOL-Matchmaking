@@ -6,22 +6,26 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "14.2.1"
-DATA_DRAGON_URL = f"https://ddragon.leagueoflegends.com/cdn/{VERSION}/data/en_US/champion.json"
+VERSION = "15.15.1"
+DATA_DRAGON_URL = (
+    f"https://ddragon.leagueoflegends.com/cdn/{VERSION}/data/en_US/champion.json"
+)
 POSTGRES_DSN = os.environ["POSTGRES_DSN"]
 
+
 def main():
-    url = DATA_DRAGON_URL
-    response = requests.get(url)
+    response = requests.get(DATA_DRAGON_URL)
     response.raise_for_status()
-    data =  response.json()["data"]
+    data = response.json()["data"]
 
     champions = []
-    for champ in data.items():
-        champions.append({
-            "champion_id": int(champ["key"]),
-            "champion_name":champ["name"]
-        })
+    for champ in data.values():
+        champions.append(
+            {
+                "champion_id": int(champ["key"]),
+                "champion_name": champ["name"],
+            }
+        )
 
     with psycopg.connect(POSTGRES_DSN) as conn:
         with conn.cursor() as cur:
@@ -29,12 +33,11 @@ def main():
                 """
                     INSERT INTO champions (champion_id, champion_name)
                     VALUES (%(champion_id)s, %(champion_name)s)
-                    ON CONFLICT (champion_id) DO UPDAT
-                    SET champion_name = EXCLUDED.champion_name;
                 """,
                 champions,
             )
         conn.commit()
+
 
 if __name__ == "__main__":
     main()

@@ -6,4 +6,4 @@ CREATE TABLE match_ids (
     FOREIGN KEY (region_name) REFERENCES regions(region_name)
 );
 
-CREATE INDEX idx_match_ids_region_queried_lease_until_match_id ON match_ids (region, queried, lease_until, match_id);
+CREATE INDEX idx_match_ids_region_queried_lease_until_match_id ON match_ids (region_name, queried, lease_until, match_id);

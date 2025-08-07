@@ -24,8 +24,8 @@ def main():
 
         data.append(
             {
-                "id": perk["id"],
-                "name": perk["name"],
+                "perk_id": perk["id"],
+                "perk_name": perk["name"],
                 "var1_desc": var_descs[0],
                 "var2_desc": var_descs[1],
                 "var3_desc": var_descs[2],
@@ -36,14 +36,9 @@ def main():
         with conn.cursor() as cur:
             cur.executemany(
                 """
-                INSERT INTO perks (id, name, var1_desc, var2_desc, var3_desc)
-                VALUES (%(id)s, %(name)s, %(var1_desc)s, %(var2_desc)s, %(var3_desc)s)
-                ON CONFLICT (id) DO UPDATE 
-                SET name = EXCLUDED.name,
-                    var1_desc = EXCLUDED.var1_desc,
-                    var2_desc = EXCLUDED.var2_desc,
-                    var3_desc = EXCLUDED.var3_desc;
-            """,
+                INSERT INTO perks (perk_id, perk_name, var1_desc, var2_desc, var3_desc)
+                VALUES (%(perk_id)s, %(perk_name)s, %(var1_desc)s, %(var2_desc)s, %(var3_desc)s)
+                """,
                 data,
             )
         conn.commit()

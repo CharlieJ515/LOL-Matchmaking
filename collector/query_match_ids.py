@@ -38,7 +38,7 @@ PSYCOPG_POOL_MAX_SIZE = 10
 WORKER_PER_REGION = 1
 
 REFILL_QUEUE_THRESHOLD = 30
-JOB_FACTORY_BATCH_SIZE = 20
+JOB_FACTORY_BATCH_SIZE = 10
 
 
 def increment(
@@ -119,7 +119,22 @@ class JobFactory(BaseJobFactory[MatchIdListDTO]):
                 params={
                     "region": region,
                     "puuid": puuid,
-                    "type": "ranked",
+                    "queue": 420,
+                    "start": 0,
+                    "count": 100,
+                },
+                increment=increment,
+                on_success=on_success,
+                on_completion=on_completion,
+            )
+            query_jobs.append(query_job)
+
+            query_job = QueryJob[MatchIdListDTO](
+                method_name="get_match_ids_by_puuid",
+                params={
+                    "region": region,
+                    "puuid": puuid,
+                    "queue": 440,
                     "start": 0,
                     "count": 100,
                 },
@@ -148,12 +163,12 @@ async def main():
     # Query Parameters
     platforms: list[RoutePlatform] = [
         # America
-        RoutePlatform.NA1,
+        # RoutePlatform.NA1,
         # RoutePlatform.BR1,
         # RoutePlatform.LA1,
         # RoutePlatform.LA2,
         # Europe
-        RoutePlatform.EUN1,
+        # RoutePlatform.EUN1,
         # RoutePlatform.EUW1,
         # RoutePlatform.TR1,
         # RoutePlatform.RU,
@@ -161,7 +176,7 @@ async def main():
         RoutePlatform.KR,
         # RoutePlatform.JP1,
         # # SEA
-        RoutePlatform.OC1,
+        # RoutePlatform.OC1,
         # RoutePlatform.SG2,
         # RoutePlatform.TW2,
         # RoutePlatform.VN2,

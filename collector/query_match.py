@@ -1,6 +1,4 @@
-from dataclasses import replace
 from datetime import timedelta
-from typing import Match, Optional
 import asyncio
 import os
 
@@ -15,115 +13,81 @@ from riot_api.rate_limit_client import (
     RateLimitItemPerSecond,
     RouteRegion,
 )
-from riot_api.types import Puuid
-from riot_api.types.dto import MatchIdListDTO
-from riot_api.types.request import (
-    RoutePlatform,
-)
 
 from logs.config import get_logger, configure_logging
 from execution.query_job import BaseJobFactory, QueryJob, refill_queue
 from execution.worker import worker
 from db.pool import get_pool, init_pool, close_pool
-from db.users import claim_users, update_match_id_query_date
-from db.matches import insert_match_ids
+from db.matches import claim_matches, insert_match, set_match_id_queried
+from db.simplified_match_dto import MatchDTO
 
 load_dotenv()
 
 
 API_KEY = os.getenv("RIOT_API_KEY", "")
 POSTGRES_DSN = os.getenv("POSTGRES_DSN", "")
-REDIS_DSN = os.getenv("REDIS_DSN", "")
 PSYCOPG_POOL_MAX_SIZE = 10
 WORKER_PER_REGION = 1
 
-REFILL_QUEUE_THRESHOLD = 30
+REFILL_QUEUE_THRESHOLD = 100
 JOB_FACTORY_BATCH_SIZE = 20
-
-
-def increment(
-    logger: structlog.BoundLogger,
-    query_job: QueryJob[MatchIdListDTO],
-    result: MatchIdListDTO,
-    headers: httpx.Headers,
-) -> Optional[QueryJob[MatchIdListDTO]]:
-    start = query_job.params.get("start")
-    count = query_job.params.get("count")
-    assert start is not None
-    assert count is not None
-
-    if len(result.root) < count:
-        return None
-
-    new_start = start + count
-    return replace(query_job, params={**query_job.params, "start": new_start})
 
 
 async def on_success(
     logger: structlog.BoundLogger,
-    query_job: QueryJob[MatchIdListDTO],
-    result: MatchIdListDTO,
+    query_job: QueryJob[MatchDTO],
+    result: MatchDTO,
     headers: httpx.Headers,
 ):
     pool = get_pool()
+    match_id = result.metadata.matchId
+    await insert_match(pool, result)
 
-    region = query_job.params.get("region")
-    assert region is not None
-    match_ids = result.root
-    await insert_match_ids(pool, region, match_ids)
-
-    logger.info(f"Inserted {len(match_ids)} match ids")
+    logger.info("Inserted match", match_id=match_id)
 
 
 async def on_completion(
     logger: structlog.BoundLogger,
-    query_job: QueryJob[MatchIdListDTO],
+    query_job: QueryJob[MatchDTO],
 ):
-    puuid = query_job.params.get("puuid")
-    assert puuid
+    match_id = query_job.params.get("match_id")
+    assert match_id
 
     pool = get_pool()
-    await update_match_id_query_date(pool, puuid)
+    await set_match_id_queried(pool, match_id)
 
-    logger.info("Updated user's query date", puuid=puuid)
+    logger.info("Marked match as queried", match_id=match_id)
 
 
-class JobFactory(BaseJobFactory[MatchIdListDTO]):
+class JobFactory(BaseJobFactory[MatchDTO]):
     def __init__(
         self,
-        platform: RoutePlatform,
+        region: RouteRegion,
         batch_size: int,
-        last_queried: timedelta,
         lease_duration: timedelta,
     ) -> None:
-        self.platform = platform
+        self.region = region
         self.batch_size = batch_size
-        self.last_queried = last_queried
         self.lease_duration = lease_duration
 
-    async def produce(self) -> list[QueryJob[MatchIdListDTO]]:
+    async def produce(self) -> list[QueryJob[MatchDTO]]:
         pool = get_pool()
-        puuids = await claim_users(
+        match_ids = await claim_matches(
             pool,
-            self.platform,
+            self.region,
             self.batch_size,
-            self.last_queried,
             self.lease_duration,
         )
 
         query_jobs = []
-        region = self.platform.to_region()
-        for puuid in puuids:
-            query_job = QueryJob[MatchIdListDTO](
-                method_name="get_match_ids_by_puuid",
+        for match_id in match_ids:
+            query_job = QueryJob[MatchDTO](
+                method_name="get_match_by_match_id",
                 params={
-                    "region": region,
-                    "puuid": puuid,
-                    "type": "ranked",
-                    "start": 0,
-                    "count": 100,
+                    "region": self.region,
+                    "match_id": match_id,
+                    "response_model": MatchDTO,
                 },
-                increment=increment,
                 on_success=on_success,
                 on_completion=on_completion,
             )
@@ -139,7 +103,6 @@ async def main():
     logger.info(f"RIOT_API_KEY: {API_KEY}")
     logger.info(f"POSTGRES_DSN: {POSTGRES_DSN}")
     logger.info(f"PSYCOPG_POOL_MAX_SIZE: {PSYCOPG_POOL_MAX_SIZE}")
-    logger.info(f"REDIS_DSN: {REDIS_DSN}")
     logger.info(f"WORKER_PER_REGION: {WORKER_PER_REGION}")
 
     # Initialize psycopg pool
@@ -147,10 +110,10 @@ async def main():
 
     # Query Parameters
     regions: list[RouteRegion] = [
-        RouteRegion.AMERICAS,
-        RouteRegion.EUROPE,
+        # RouteRegion.AMERICAS,
+        # RouteRegion.EUROPE,
         RouteRegion.ASIA,
-        RouteRegion.SEA,
+        # RouteRegion.SEA,
     ]
 
     logger.info("Creating workers...")
@@ -177,8 +140,7 @@ async def main():
         job_factory = JobFactory(
             region,
             JOB_FACTORY_BATCH_SIZE,
-            timedelta(days=100),
-            timedelta(minutes=100),
+            timedelta(minutes=30),
         )
         refill = refill_queue(job_factory, job_queue, REFILL_QUEUE_THRESHOLD, 1)
         asyncio.create_task(refill)
