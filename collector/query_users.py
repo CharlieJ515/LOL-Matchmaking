@@ -6,6 +6,7 @@ import os
 
 from pydantic import BaseModel, RootModel
 from dotenv import load_dotenv
+from rich.traceback import install
 import httpx
 
 import structlog
@@ -30,6 +31,7 @@ from db.pool import get_pool, init_pool, close_pool
 from db.users import insert_user
 
 load_dotenv()
+install()
 
 
 API_KEY = os.getenv("RIOT_API_KEY", "")

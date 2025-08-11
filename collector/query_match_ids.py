@@ -1,10 +1,11 @@
 from dataclasses import replace
 from datetime import timedelta
-from typing import Match, Optional
+from typing import Optional
 import asyncio
 import os
 
 from dotenv import load_dotenv
+from rich.traceback import install
 import httpx
 
 import structlog
@@ -13,9 +14,7 @@ import structlog.stdlib
 from riot_api.rate_limit_client import (
     RateLimitClient as RiotClient,
     RateLimitItemPerSecond,
-    RouteRegion,
 )
-from riot_api.types import Puuid
 from riot_api.types.dto import MatchIdListDTO
 from riot_api.types.request import (
     RoutePlatform,
@@ -29,6 +28,7 @@ from db.users import claim_users, update_match_id_query_date
 from db.matches import insert_match_ids
 
 load_dotenv()
+install()
 
 
 API_KEY = os.getenv("RIOT_API_KEY", "")
@@ -70,8 +70,8 @@ async def on_success(
     region = query_job.params.get("region")
     assert region is not None
     match_ids = result.root
-    await insert_match_ids(pool, region, match_ids)
 
+    await insert_match_ids(pool, region, match_ids)
     logger.info(f"Inserted {len(match_ids)} match ids")
 
 
@@ -163,12 +163,12 @@ async def main():
     # Query Parameters
     platforms: list[RoutePlatform] = [
         # America
-        # RoutePlatform.NA1,
+        RoutePlatform.NA1,
         # RoutePlatform.BR1,
         # RoutePlatform.LA1,
         # RoutePlatform.LA2,
         # Europe
-        # RoutePlatform.EUN1,
+        RoutePlatform.EUN1,
         # RoutePlatform.EUW1,
         # RoutePlatform.TR1,
         # RoutePlatform.RU,
@@ -176,7 +176,7 @@ async def main():
         RoutePlatform.KR,
         # RoutePlatform.JP1,
         # # SEA
-        # RoutePlatform.OC1,
+        RoutePlatform.OC1,
         # RoutePlatform.SG2,
         # RoutePlatform.TW2,
         # RoutePlatform.VN2,

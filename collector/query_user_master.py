@@ -4,9 +4,7 @@ import os
 
 from pydantic import BaseModel
 from dotenv import load_dotenv
-
-import structlog
-import structlog.stdlib
+from rich.traceback import install
 
 from riot_api.rate_limit_client import Client as RiotClient
 from riot_api.types import Puuid
@@ -16,8 +14,8 @@ from logs.config import get_logger, configure_logging
 from db.pool import get_pool, init_pool, close_pool
 from db.users import insert_user
 
-logger = structlog.get_logger("collector")
 load_dotenv()
+install()
 
 
 class LeagueListDTO(BaseModel):
