@@ -5,7 +5,78 @@ import logging
 from logging.handlers import RotatingFileHandler
 import structlog
 
-_logger = None  # module-level singleton logger
+_logger = None
+
+
+class PerComponentFileRouter(logging.Handler):
+    def __init__(
+        self,
+        base_dir: str,
+        entry_name: str,
+        max_bytes: int,
+        backup_count: int,
+        formatter: logging.Formatter,
+    ):
+        super().__init__()
+        self.base_dir = Path(base_dir)
+        self.entry_name = entry_name
+        self.max_bytes = max_bytes
+        self.backup_count = backup_count
+        self.formatter = formatter
+        self._handlers: dict[str, RotatingFileHandler] = {}
+
+    def _get_component(self, record: logging.LogRecord) -> str | None:
+        # 1) Preferred: attribute set by ProcessorFormatter.wrap_for_formatter
+        ev = getattr(record, "structlog", None) or record.__dict__.get("structlog")
+        if isinstance(ev, dict) and "component" in ev:
+            return str(ev["component"])
+
+        # 2) Some versions keep the event dict in record.msg (pre-formatting)
+        #    When using wrap_for_formatter, record.msg can still be the event dict.
+        if isinstance(record.msg, dict) and "component" in record.msg:
+            return str(record.msg["component"])
+
+        # 3) Plain stdlib logging with extra={"component": "..."}
+        comp = record.__dict__.get("component")
+        if comp is not None:
+            return str(comp)
+
+        return None
+
+    def _get_handler_for(self, component: str) -> RotatingFileHandler:
+        h = self._handlers.get(component)
+        if h is None:
+            file_path = self.base_dir / f"{self.entry_name}.{component}.log"
+            h = RotatingFileHandler(
+                file_path,
+                mode="a",
+                maxBytes=self.max_bytes,
+                backupCount=self.backup_count,
+            )
+            h.setLevel(self.level)
+            h.setFormatter(self.formatter)
+            # write a small header on creation
+            h.stream.write("=" * 80 + "\n")
+            h.stream.write(
+                f"New run (component={component}) at {datetime.now().isoformat()}\n"
+            )
+            h.stream.write("=" * 80 + "\n\n")
+            h.flush()
+            self._handlers[component] = h
+        return h
+
+    def emit(self, record: logging.LogRecord) -> None:
+        component = self._get_component(record)
+        if not component:
+            return  # silently skip if no component; keeps router focused on workers only
+        handler = self._get_handler_for(component)
+        handler.handle(record)
+
+    def close(self) -> None:
+        for h in self._handlers.values():
+            h.close()
+        self._handlers.clear()
+        super().close()
 
 
 def configure_logging(
@@ -50,20 +121,7 @@ def configure_logging(
     console_handler.setFormatter(console_formatter)
     std_logger.addHandler(console_handler)
 
-    # log file names
-    entry_name = Path(__main__.__file__).stem
-    log_file = Path(log_dir) / f"{entry_name}.log"
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    critical_log_file = Path(log_dir) / f"{entry_name}.critical_{timestamp}.log"
-
     # File handler (JSON logs)
-    file_handler = RotatingFileHandler(
-        log_file,
-        mode="a",
-        maxBytes=log_file_size,
-        backupCount=log_file_backup_count,
-    )
-    file_handler.setLevel(level)
     file_formatter = structlog.stdlib.ProcessorFormatter(
         processor=structlog.processors.JSONRenderer(),
         foreign_pre_chain=[
@@ -72,16 +130,23 @@ def configure_logging(
             structlog.processors.TimeStamper(fmt="iso"),
         ],
     )
-    file_handler.setFormatter(file_formatter)
-    std_logger.addHandler(file_handler)
 
-    # Add separator to log file
-    file_handler.stream.write("=" * 80 + "\n")
-    file_handler.stream.write(f"New run started at {datetime.now().isoformat()}\n")
-    file_handler.stream.write("=" * 80 + "\n\n")
-    file_handler.flush()
+    # Per worker handler
+    entry_name = Path(__main__.__file__).stem
+    router = PerComponentFileRouter(
+        base_dir=log_dir,
+        entry_name=entry_name,
+        max_bytes=log_file_size,
+        backup_count=log_file_backup_count,
+        formatter=file_formatter,
+    )
+    router.setLevel(level)
+    std_logger.addHandler(router)
 
     # Critical level logger
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    critical_log_file = Path(log_dir) / f"{entry_name}.critical_{timestamp}.log"
+
     critical_handler = logging.FileHandler(
         critical_log_file,
         mode="w",
