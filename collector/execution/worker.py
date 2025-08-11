@@ -54,6 +54,11 @@ async def worker(
         skip_query = False
         res, headers = None, None  # to prevent pyright possibly unbound error
         while True:
+            # check stop event
+            if stop_all_workers.is_set() or stop_route_workers.is_set():
+                skip_query = True
+                break
+
             try:
                 res, headers = await query_job.execute(client)
             except RateLimitExceeded as e:
