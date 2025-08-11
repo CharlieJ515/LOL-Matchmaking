@@ -3,6 +3,7 @@ import asyncio
 import os
 
 from dotenv import load_dotenv
+from rich.traceback import install
 import httpx
 
 import structlog
@@ -22,6 +23,7 @@ from db.matches import claim_matches, insert_match, set_match_id_queried
 from db.simplified_match_dto import MatchDTO
 
 load_dotenv()
+install()
 
 
 API_KEY = os.getenv("RIOT_API_KEY", "")
@@ -41,22 +43,20 @@ async def on_success(
 ):
     pool = get_pool()
     match_id = result.metadata.matchId
-    await insert_match(pool, result)
+    try:
+        await insert_match(pool, result)
+        logger.info("Inserted match", match_id=match_id)
 
-    logger.info("Inserted match", match_id=match_id)
+        await set_match_id_queried(pool, match_id)
+        logger.info("Marked match as queried", match_id=match_id)
 
-
-async def on_completion(
-    logger: structlog.BoundLogger,
-    query_job: QueryJob[MatchDTO],
-):
-    match_id = query_job.params.get("match_id")
-    assert match_id
-
-    pool = get_pool()
-    await set_match_id_queried(pool, match_id)
-
-    logger.info("Marked match as queried", match_id=match_id)
+    except Exception as e:
+        logger.critical(
+            "Failed to insert match",
+            match_id=match_id,
+            exc_info=True,
+            exception=e,
+        )
 
 
 class JobFactory(BaseJobFactory[MatchDTO]):
@@ -89,7 +89,6 @@ class JobFactory(BaseJobFactory[MatchDTO]):
                     "response_model": MatchDTO,
                 },
                 on_success=on_success,
-                on_completion=on_completion,
             )
             query_jobs.append(query_job)
 
@@ -110,10 +109,10 @@ async def main():
 
     # Query Parameters
     regions: list[RouteRegion] = [
-        # RouteRegion.AMERICAS,
-        # RouteRegion.EUROPE,
+        RouteRegion.AMERICAS,
+        RouteRegion.EUROPE,
         RouteRegion.ASIA,
-        # RouteRegion.SEA,
+        RouteRegion.SEA,
     ]
 
     logger.info("Creating workers...")
