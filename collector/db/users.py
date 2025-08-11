@@ -34,13 +34,13 @@ async def claim_users(
             await cur.execute(
                 """
                 WITH claimed AS (
-                    SELECT puuid
-                    FROM users
-                    WHERE platform_name = %(platform_name)s
+                SELECT puuid
+                FROM users
+                WHERE platform_name = %(platform_name)s
                     AND match_id_queried < NOW() - %(last_queried)s
                     AND lease_until < NOW()
-                    ORDER BY puuid
-                    LIMIT %(batch_size)s
+                FOR UPDATE SKIP LOCKED
+                LIMIT %(batch_size)s
                 )
                 UPDATE users
                 SET lease_until = NOW() + %(lease_duration)s
