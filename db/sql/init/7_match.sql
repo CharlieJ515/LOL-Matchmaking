@@ -77,7 +77,6 @@ CREATE TABLE match_participants (
     summoner1_id SMALLINT REFERENCES summoners(summoner_id),
     summoner2_id SMALLINT REFERENCES summoners(summoner_id),
     platform_name TEXT NOT NULL,
-    puuid TEXT NOT NULL REFERENCES users(puuid),
     PRIMARY KEY (platform_name, game_id, participant_id),
     FOREIGN KEY (platform_name, game_id, team_id) REFERENCES teams(platform_name, game_id, team_id) ON DELETE CASCADE
 );
