@@ -8,7 +8,6 @@ from riot_api.types.converters import millis_to_datetime
 from riot_api.types.enums import ChampionId
 from riot_api.types.enums import Participant, Team, Position, KaynTransform
 from riot_api.types.base_types import (
-    Puuid,
     Count,
     AmountInt,
     AmountFloat,
@@ -26,7 +25,7 @@ class MatchDTO(BaseModel):
 class MetadataDTO(BaseModel):
     # dataVersion: str
     matchId: str
-    participants: List[Puuid]
+    # participants: List[Puuid]
 
 
 DatetimeMilli = Annotated[datetime, PlainValidator(millis_to_datetime)]
@@ -56,7 +55,7 @@ class ParticipantDTO(BaseModel):
     assistMePings: Count
     assists: Count
     baronKills: Count
-    bountyLevel: Count
+    bountyLevel: Count = Count(0)
     champExperience: AmountInt
     champLevel: Count
     championId: ChampionId
@@ -149,7 +148,7 @@ class ParticipantDTO(BaseModel):
     # playerSubteamId: int
     pushPings: Count
     # profileIcon: int
-    puuid: Puuid
+    # puuid: Puuid
     quadraKills: Count
     # riotIdGameName: str
     # riotIdTagline: str
@@ -535,8 +534,7 @@ INSERT INTO match_participants (
     champion_id,
     summoner1_id,
     summoner2_id,
-    platform_name,
-    puuid
+    platform_name
 ) VALUES (
     %(gameId)s,
     %(teamId)s,
@@ -545,8 +543,7 @@ INSERT INTO match_participants (
     %(championId)s,
     %(summoner1Id)s,
     %(summoner2Id)s,
-    %(platformName)s,
-    %(puuid)s
+    %(platformName)s
 );
 """
 
